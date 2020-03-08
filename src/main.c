@@ -91,8 +91,12 @@ void dowork(void)
 {
 	if (paused) return;
 	++millis;
-	step6502();
-	gpio_toggle(GPIOC, GPIO13);
+	/* Should we single step (1khz clock) */
+	//step6502();
+	/* Or do the Fandango (1Mhz clock) */
+	exec6502(1000);
+	/* Toggle LED once per cycle? Nah, save the clocks */
+	// gpio_toggle(GPIOC, GPIO13);
 }
 
 void sys_tick_handler(void)
