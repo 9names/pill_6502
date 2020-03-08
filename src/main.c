@@ -27,6 +27,7 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/usb/usbd.h>
 #include <libopencm3/usb/cdc.h>
+#include "../libopencm3/include/libopencmsis/core_cm3.h"
 
 #include "fake6502.h"
 #include "acia6850.h"
@@ -84,13 +85,21 @@ static const char *usb_strings[] = {
 };
 
 static bool paused = true;
-uint32_t millis = 0;
-void sys_tick_handler(void)
+volatile uint32_t millis = 0;
+
+void dowork(void)
 {
 	if (paused) return;
 	++millis;
 	step6502();
 	gpio_toggle(GPIOC, GPIO13);
+}
+
+void sys_tick_handler(void)
+{
+	if (!paused) {
+		++millis;
+    }
 }
 
 
@@ -210,6 +219,22 @@ int main(void)
 	setup_clock();
 	setup_gpio();
 
+	rcc_periph_clock_enable(RCC_GPIOA);
+	// Re-enumeration hack from libopencm3 example
+	/*
+	 * Vile hack to reenumerate, physically _drag_ d+ low.
+	 * do NOT do this if you're board has proper usb pull up control!
+	 * (need at least 2.5us to trigger usb disconnect)
+	 */
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ,
+		GPIO_CNF_OUTPUT_PUSHPULL, GPIO12);
+	gpio_clear(GPIOA, GPIO12);
+	for (unsigned int i = 0; i < 800000; i++) {
+		__asm__("nop");
+	}
+
+	rcc_periph_clock_enable(RCC_OTGFS);
+
 	usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &dev_descr, &config, usb_strings,
 		sizeof(usb_strings)/sizeof(char *),
 		usbd_control_buffer, sizeof(usbd_control_buffer));
@@ -217,8 +242,26 @@ int main(void)
 	usbd_register_reset_callback(usbd_dev, usb_reset);
 
 	reset6502();
+	nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);
+	nvic_enable_irq(NVIC_USB_WAKEUP_IRQ);
 
-	while (1)
-		usbd_poll(usbd_dev);
+	// TODO: put CPU to sleep when we have nothing to do
+	uint32_t cached_millis=millis;
+	while (1){
+		while (cached_millis != millis)
+		{
+			dowork();
+			++cached_millis;
+		}
+	}
 }
 
+void usb_wakeup_isr(void)
+{
+  usbd_poll(usbd_dev);
+}
+
+void usb_lp_can_rx0_isr(void)
+{
+  usbd_poll(usbd_dev);
+}
